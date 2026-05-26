@@ -1,0 +1,35 @@
+{
+  "_comment": "Reproducible inputs for the OV-vs-vLLM bench on Panther Lake. text_only prompts exercise the LLM path; vision prompts exercise the VLM image-token path. max_tokens is intentionally small so the bench finishes in minutes per backend, not hours.",
+  "text_only": [
+    {
+      "id": "t-short",
+      "prompt": "In one sentence, what is the capital of France?",
+      "max_tokens": 32
+    },
+    {
+      "id": "t-medium",
+      "prompt": "List five steps a new engineer should take in their first week at a hardware company. Be concise.",
+      "max_tokens": 128
+    },
+    {
+      "id": "t-long",
+      "prompt": "Explain how an integrated GPU shares memory with the CPU on a modern laptop SoC, and why this affects memory bandwidth for ML workloads. Keep it under 200 words.",
+      "max_tokens": 256
+    }
+  ],
+  "vision": [
+    {
+      "id": "v-describe",
+      "prompt": "Describe this image in one sentence.",
+      "image": "data/images/sample_scene.jpg",
+      "max_tokens": 64,
+      "_note": "Operator supplies an image file under data/images/ before running the vision rows; bench will SKIP rows whose image is missing."
+    },
+    {
+      "id": "v-extract",
+      "prompt": "List every distinct object you can see, one per line.",
+      "image": "data/images/sample_scene.jpg",
+      "max_tokens": 128
+    }
+  ]
+}
