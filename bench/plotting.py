@@ -18,9 +18,27 @@ BACKEND_COLORS = {
     "llamacpp": "#2ca02c",
 }
 
+# Config colors for the NPU-vs-shared notebook (03). The split config (Whisper
+# on NPU) is the "good" Intel-blue line; the shared config (both on iGPU) is
+# red, the contended one.
+CONFIG_COLORS = {
+    "split": "#0071c5",   # Gemma iGPU + Whisper NPU
+    "shared": "#d62728",  # Gemma iGPU + Whisper iGPU
+}
+
 
 def _color(backend: str) -> str:
     return BACKEND_COLORS.get(backend.lower(), "#7f7f7f")
+
+
+def _config_color(label: str) -> str:
+    """Pick a config color by substring so callers can pass human labels
+    like 'split (NPU)' / 'shared (iGPU)'."""
+    low = label.lower()
+    for key, c in CONFIG_COLORS.items():
+        if key in low:
+            return c
+    return "#7f7f7f"
 
 
 def _lighten(hex_color: str, factor: float = 0.55) -> str:
@@ -172,4 +190,125 @@ def memory_timeseries(
     ax.set_title(title)
     ax.legend()
     ax.grid(linestyle=":", alpha=0.5)
+    return ax
+
+
+# ── NPU-vs-shared (notebook 03) ──────────────────────────────────────────────
+# These take RunResult-like objects (bench.load.RunResult) duck-typed via the
+# methods they expose — plotting.py stays decoupled from load.py.
+
+def interference_timeline(runs, *, bin_s: float = 0.5, sharey: bool = True,
+                          figsize=(11, 6)):
+    """THE headline chart. One stacked panel per run, shared time axis.
+
+    Each panel: Gemma's instantaneous decode throughput (tok/s, binned) as a
+    line, with every concurrent transcription drawn as a shaded band. In the
+    split config (Whisper on NPU) the line is flat through the bands; in the
+    shared config (Whisper on the iGPU) it sags inside each band — that's the
+    LLM stalling while the GPU services speech. The contrast is the deliverable.
+    """
+    import matplotlib.patches as mpatches
+
+    runs = list(runs)
+    fig, axes = plt.subplots(len(runs), 1, figsize=figsize,
+                             sharex=True, sharey=sharey, squeeze=False)
+    axes = axes[:, 0]
+
+    ymax = 0.0
+    for ax, run in zip(axes, runs):
+        c = _config_color(run.label)
+        t, tps = run.instantaneous_llm_tps(bin_s=bin_s)
+        if t:
+            ax.plot(t, tps, color=c, lw=1.6, zorder=3)
+            ymax = max(ymax, max(tps))
+        for (s, e) in run.stt_spans():
+            ax.axvspan(s, e, color="#888888", alpha=0.18, lw=0, zorder=1)
+        ax.set_title(run.label, fontsize=11, loc="left")
+        ax.set_ylabel("LLM tok/s")
+        ax.grid(axis="y", linestyle=":", alpha=0.5, zorder=0)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    if sharey and ymax > 0:
+        for ax in axes:
+            ax.set_ylim(0, ymax * 1.12)
+    axes[-1].set_xlabel("wall-clock time (s)")
+
+    band = mpatches.Patch(facecolor="#888888", alpha=0.18,
+                          label="transcription in flight")
+    axes[0].legend(handles=[band], loc="upper right", fontsize=9, frameon=True)
+    fig.suptitle("LLM decode throughput under concurrent STT load",
+                 fontsize=13, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    return fig, axes
+
+
+def latency_cdf(series: dict, *, ax=None, xlabel: str = "latency (s)",
+                title: Optional[str] = None, mark=(95, 99), logx: bool = False):
+    """Empirical CDF per config, with p95/p99 markers.
+
+    `series`: label -> list of per-request values (TPOT, STT latency, RTF…).
+    The story is the tail: in the shared config the curve leans right and the
+    p95/p99 ticks jump out past the split config's.
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 4.5))
+
+    for label, xs in series.items():
+        xs = [x for x in xs if x is not None]
+        if not xs:
+            continue
+        c = _config_color(label)
+        s = sorted(xs)
+        y = [(i + 1) / len(s) for i in range(len(s))]
+        ax.step(s, y, where="post", color=c, lw=1.8, label=label, zorder=3)
+        for p in mark:
+            import numpy as np
+            v = float(np.percentile(s, p))
+            ax.axvline(v, color=c, ls=":", lw=1.0, alpha=0.7, zorder=2)
+            ax.annotate(f"p{p}", xy=(v, 0.04), fontsize=8, color=c,
+                        rotation=90, va="bottom", ha="right")
+
+    if logx:
+        ax.set_xscale("log")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("cumulative fraction of requests")
+    ax.set_ylim(0, 1.02)
+    if title:
+        ax.set_title(title, fontsize=12)
+    ax.grid(linestyle=":", alpha=0.5, zorder=0)
+    ax.legend(loc="lower right", fontsize=9, frameon=True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    return ax
+
+
+def metric_bars(rows: list[dict], *, metric: str, ylabel: str, ax=None,
+                title: Optional[str] = None, annotate: bool = True):
+    """One bar per config for a single metric (`rows` = list of summary dicts).
+
+    Used for the throughput panels: e.g. metric='llm_tokens_per_s' and
+    metric='audio_s_per_s'. Bars are config-colored so the split config reads
+    as the same blue across every chart in the notebook.
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=(5, 4))
+    labels = [r["label"] for r in rows]
+    vals = [r.get(metric, 0.0) for r in rows]
+    colors = [_config_color(l) for l in labels]
+    xs = range(len(rows))
+    ax.bar(xs, vals, color=colors, width=0.6, zorder=3)
+    if annotate:
+        for x, v in zip(xs, vals):
+            ax.text(x, v, f"{v:.1f}", ha="center", va="bottom", fontsize=9, zorder=4)
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel(ylabel)
+    if vals:
+        ax.set_ylim(0, max(vals) * 1.18)
+    if title:
+        ax.set_title(title, fontsize=12)
+    ax.grid(axis="y", linestyle=":", alpha=0.5, zorder=0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     return ax

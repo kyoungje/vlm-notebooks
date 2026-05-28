@@ -1,0 +1,13 @@
+{
+  "_comment": "Audio clips for the NPU-vs-shared concurrency bench (notebook 03). Each clip is uploaded to the Whisper server's /v1/audio/transcriptions. `duration_s` is the SOURCE OF TRUTH for RTF (real-time factor = latency / duration_s) — set it per clip. WAV clips are auto-probed by bench.client.audio_duration_s() if duration_s is null; compressed formats (mp3/m4a) can't be probed without librosa/soundfile, so declare duration_s for those. Absolute STT-latency charts work even when duration_s is null (RTF charts are simply skipped). For an 'always-on listening' profile, a 10-30s utterance per clip is realistic.",
+  "default": "korean_10s",
+  "clips": [
+    {
+      "id": "korean_10s",
+      "path": "data/audio/korean_audio.mp3",
+      "language": "ko",
+      "duration_s": null,
+      "_note": "Starter clip copied from movensys_vlm/docker/whisper. SET duration_s before relying on RTF — probe it once with `ffprobe -show_entries format=duration` or `python -c 'import librosa,sys;print(librosa.get_duration(path=sys.argv[1]))' <file>`. Until set, the notebook reports STT latency in seconds (still shows the tail) and skips RTF."
+    }
+  ]
+}
