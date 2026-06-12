@@ -1,9 +1,11 @@
 # vlm-notebooks — OpenVINO vs vLLM memory footprint on Intel Panther Lake (Core Ultar Series 3)
 
-Three Jupyter notebooks + a tiny Python harness that benchmark **how much
-memory each backend's server process holds** for small VLMs/LLMs on an
-Intel Panther Lake laptop.
-The headline question is RAM/iGPU footprint vs model size, not raw throughput.
+Four Jupyter notebooks + a tiny Python harness benchmarking small VLMs/LLMs
+on Intel hardware. Notebooks 01–03 ask **how much memory each backend's server
+process holds** on an Intel Panther Lake laptop (footprint vs model size, not
+raw throughput). Notebook 04 is a separate experiment on a different box: the
+serving **throughput** of one discrete Arc Pro B60 in a desktop, for the
+two-B60-vs-RTX-6000-Ada cost comparison.
 
 ## Layout
 
@@ -11,18 +13,21 @@ The headline question is RAM/iGPU footprint vs model size, not raw throughput.
 bench/                # reusable Python (no notebook code here)
   client.py           # OpenAI client: chat completions (+ per-token timing) and Whisper STT
   load.py             # concurrent LLM+STT load runner + stats (notebook 03)
+  sweep.py            # single-node LLM concurrency-sweep runner + stats (notebook 04)
   memprobe.py         # background RSS+iGPU sampler tied to server PID
   plotting.py         # matplotlib helpers used by the notebooks
 notebooks/
   01_env.ipynb              # validate the backend on :9000 and the probes
   02_memory_footprint.ipynb # the headline memory bar chart
   03_npu_vs_shared.ipynb    # Whisper on NPU vs sharing the iGPU (concurrency)
+  04_b60_throughput.ipynb   # Arc Pro B60 single-node throughput / serving capacity
 data/
   prompts.json          # reproducible LLM prompts (text + vision)
   audio.json            # STT clips + declared durations (notebook 03)
   audio/                # the audio clips themselves
   memory_footprint.csv  # appended by notebook 02 across runs
   concurrency/          # per-config runs saved by notebook 03
+  b60/                  # per-node throughput runs saved by notebook 04
 ```
 
 Notebook 02's deliverable is intentionally scoped to **memory footprint**,
@@ -70,6 +75,44 @@ Caveats worth stating in any writeup: NPU and iGPU share DRAM **bandwidth**
 (the isolation shown is on compute, not bandwidth); NPU device memory isn't
 exposed via fdinfo, so the split config's Whisper-iGPU bar reads 0 by
 construction; and Panther Lake throttles, so cool down between passes.
+
+## Notebook 04 — Arc Pro B60 single-node throughput
+
+A separate experiment on a different machine: one discrete **Arc Pro B60**
+(24 GB, Battlemage, `xe` driver) in an ordinary desktop. It is **standalone** —
+it does not import or run 01/02/03 and has **no NPU path** (these desktops have
+no NPU). It produces the per-node numbers the *two-B60-vs-RTX-6000-Ada* cost
+comparison is built from, measuring three things:
+
+1. **Validation** — a backend is up on `:9000` and the B60's memory is readable
+   via `xe` fdinfo.
+2. **Single-stream baseline** — uncontended TTFT, decode tok/s, peak footprint.
+3. **Concurrency sweep** — aggregate throughput and tail latency as in-flight
+   requests climb; the level where aggregate tok/s flattens (the *knee*) is this
+   B60's serving capacity for the model.
+
+Prerequisites: the B60 visible to the host (`/dev/dri/renderD128`, your user in
+the `render` group, kernel 6.12+ with the `xe` driver bound), Docker able to
+pass `--device /dev/dri`, and the repo's Python env. Bring up one backend on
+`:9000` (vLLM-XPU recommended for the cost story — confirm the current Intel XPU
+image tag, the patched "llm-scaler" build is Arc-oriented — or OpenVINO Model
+Server); start with `Qwen2.5-VL-3B-Instruct` to prove the path, then swap in the
+real model. Edit the `EDIT PER RUN` cell (`NODE`, `MODEL`, `QUANTIZATION`,
+`CONCURRENCY_LEVELS`, `WINDOW_S`, …) and run top to bottom. Section 1's asserts
+must pass first. The run is saved to
+`data/b60/<NODE>_<MODEL>_<timestamp>.json` — the input to the Phase-2 two-node
+cost chart (one model instance per B60 behind a load balancer, with
+**tokens/s/$** and **tokens/s/W** as the headline metrics vs the single Ada).
+
+Caveats for the writeup: the B60 is Gen5 x8 and a desktop slot may down-train it
+(section 1 reads `current_link_speed`/`width` from `/sys`; capture
+`sudo lspci -vv | grep -A2 LnkSta` for the authoritative figure); log board
+watts per level if you can read them, for tokens/s/W; if the backend doesn't
+stream, TTFT/decode read `None` and the latency panel shows a placeholder while
+throughput still computes; and Arc XPU serving is younger than the CUDA path, so
+note image/driver versions and frame any gap as "already cost-competitive on an
+immature stack." The Ada wins single-request latency — expected; the B60 story
+is throughput-per-dollar.
 
 ## How the bench is structured
 
@@ -122,8 +165,10 @@ pip install -r requirements.txt
 jupyter lab notebooks/
 ```
 
-Run `01_env.ipynb` first on a fresh box. Then `02` and `03` once per
-(backend, model) you want to compare.
+Run `01_env.ipynb` first on a fresh Panther Lake box. Then `02` and `03` once
+per (backend, model) you want to compare. `04_b60_throughput.ipynb` is a
+standalone experiment on the Arc Pro B60 desktop — run it on its own; it needs
+the same env and a backend on `:9000` but nothing from 01–03.
 
 ## Notes / caveats
 

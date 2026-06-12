@@ -26,6 +26,10 @@ CONFIG_COLORS = {
     "shared": "#d62728",  # Gemma iGPU + Whisper iGPU
 }
 
+# The B60 throughput notebook (04) brands its one node Intel blue — it's an
+# Arc card, and the cost-effectiveness story is the Intel-blue line rising.
+B60_COLOR = "#0071c5"
+
 
 def _color(backend: str) -> str:
     return BACKEND_COLORS.get(backend.lower(), "#7f7f7f")
@@ -312,3 +316,103 @@ def metric_bars(rows: list[dict], *, metric: str, ylabel: str, ax=None,
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     return ax
+
+
+# ── B60 single-node characterization (notebook 04) ───────────────────────────
+
+def sweep_curves(levels, *, knee_concurrency=None, peak_concurrency=None,
+                 saturated=False, node_label=None, figsize=(12, 4.8)):
+    """THE notebook-04 chart: two panels sharing the concurrency x-axis.
+
+    Left — aggregate decode tok/s vs in-flight requests. This is the capacity
+    curve; the knee (marked if `knee_concurrency` given) is this B60's serving
+    capacity for the model. If `peak_concurrency` differs from the knee it's
+    marked too, and when `saturated` is True a caption flags that throughput
+    fell past the peak (the GPU is over-subscribed beyond that point).
+    Right — TTFT p50/p95 vs concurrency: latency climbs as the queue deepens.
+    If the backend never streamed (every level's TTFT is None — see client.call's
+    SSE fallback) the right panel shows a placeholder instead, and the left
+    throughput curve stands on its own.
+
+    `levels`: list of per-level summary dicts (bench.sweep.LevelResult.summary()),
+    each with at least `concurrency` and `agg_tokens_per_s`.
+    """
+    levels = sorted(levels, key=lambda s: s["concurrency"])
+    cs = [s["concurrency"] for s in levels]
+    tp = [s["agg_tokens_per_s"] for s in levels]
+    c = B60_COLOR
+
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=figsize)
+
+    # left: capacity curve
+    axl.plot(cs, tp, "-o", color=c, lw=2.0, zorder=3)
+    for x, y in zip(cs, tp):
+        axl.annotate(f"{y:.0f}", (x, y), textcoords="offset points",
+                     xytext=(0, 8), ha="center", fontsize=8, color="#444")
+    if knee_concurrency is not None:
+        ky = next((s["agg_tokens_per_s"] for s in levels
+                   if s["concurrency"] == knee_concurrency), None)
+        if ky is not None:
+            axl.axvline(knee_concurrency, color="#444", ls="--", lw=1.0, alpha=0.7,
+                        zorder=2)
+            axl.annotate(f"knee ≈ {knee_concurrency} in-flight\n{ky:.0f} tok/s",
+                         (knee_concurrency, ky), textcoords="offset points",
+                         xytext=(10, -30), fontsize=9, color="#444",
+                         arrowprops=dict(arrowstyle="->", color="#444", lw=0.8))
+    # mark the peak only when it's a *different* level than the knee, so a
+    # plateau (knee == peak) doesn't draw two overlapping labels
+    if peak_concurrency is not None and peak_concurrency != knee_concurrency:
+        py = next((s["agg_tokens_per_s"] for s in levels
+                   if s["concurrency"] == peak_concurrency), None)
+        if py is not None:
+            axl.annotate(f"peak {py:.0f} tok/s", (peak_concurrency, py),
+                         textcoords="offset points", xytext=(0, 10),
+                         ha="center", fontsize=8, color=c, fontweight="bold")
+    axl.set_xlabel("in-flight requests (concurrency)")
+    axl.set_ylabel("aggregate decode tok/s")
+    axl.set_title("Serving capacity — aggregate throughput", fontsize=11)
+    axl.set_xscale("log", base=2)
+    axl.set_xticks(cs); axl.set_xticklabels([str(x) for x in cs])
+    axl.set_ylim(0, max(tp) * 1.22 if tp else 1)
+    axl.grid(linestyle=":", alpha=0.5, zorder=0)
+    axl.spines["top"].set_visible(False); axl.spines["right"].set_visible(False)
+    if saturated and peak_concurrency is not None:
+        axl.text(0.5, -0.22,
+                 f"⚠ throughput falls past {peak_concurrency} in-flight — "
+                 "over-subscribed beyond the knee",
+                 transform=axl.transAxes, ha="center", va="top",
+                 fontsize=8, color="#b00", style="italic")
+
+    # right: TTFT vs concurrency, or a placeholder when the backend didn't stream
+    streamed = [s for s in levels if s.get("ttft_p50") is not None]
+    if streamed:
+        sc = [s["concurrency"] for s in streamed]
+        p50 = [s["ttft_p50"] for s in streamed]
+        p95 = [s.get("ttft_p95") for s in streamed]
+        axr.plot(sc, p50, "-o", color=c, lw=2.0, label="TTFT p50", zorder=3)
+        if all(v is not None for v in p95):
+            axr.plot(sc, p95, "--s", color=_lighten(c, 0.35), lw=1.7,
+                     label="TTFT p95", zorder=3)
+        axr.set_xlabel("in-flight requests (concurrency)")
+        axr.set_ylabel("time to first token (s)")
+        axr.set_title("Tail latency vs concurrency", fontsize=11)
+        axr.set_xscale("log", base=2)
+        axr.set_xticks(sc); axr.set_xticklabels([str(x) for x in sc])
+        axr.legend(fontsize=9, frameon=True)
+        axr.grid(linestyle=":", alpha=0.5, zorder=0)
+        axr.spines["top"].set_visible(False); axr.spines["right"].set_visible(False)
+    else:
+        axr.text(0.5, 0.5,
+                 "backend did not stream (SSE)\nTTFT / decode unavailable —\n"
+                 "aggregate throughput still valid",
+                 ha="center", va="center", fontsize=11, color="#999",
+                 transform=axr.transAxes)
+        axr.set_xticks([]); axr.set_yticks([])
+        for sp in axr.spines.values():
+            sp.set_visible(False)
+
+    if node_label:
+        fig.suptitle(f"Arc Pro B60 single-node characterization — {node_label}",
+                     fontsize=13, y=1.02)
+    fig.tight_layout()
+    return fig, (axl, axr)
