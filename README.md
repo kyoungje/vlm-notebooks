@@ -1,11 +1,12 @@
 # vlm-notebooks — OpenVINO vs vLLM memory footprint on Intel Panther Lake (Core Ultar Series 3)
 
-Four Jupyter notebooks + a tiny Python harness benchmarking small VLMs/LLMs
+Five Jupyter notebooks + a tiny Python harness benchmarking small VLMs/LLMs
 on Intel hardware. Notebooks 01–03 ask **how much memory each backend's server
 process holds** on an Intel Panther Lake laptop (footprint vs model size, not
 raw throughput). Notebook 04 is a separate experiment on a different box: the
-serving **throughput** of one discrete Arc Pro B60 in a desktop, for the
-two-B60-vs-RTX-6000-Ada cost comparison.
+serving **throughput** of one discrete Arc Pro B60 in a desktop. Notebook 05 is
+Phase 2 — two B60 desktops driven together via Ray — producing the headline
+**tokens/s/$** and **tokens/s/W** for the two-B60-vs-RTX-6000-Ada comparison.
 
 ## Layout
 
@@ -14,6 +15,7 @@ bench/                # reusable Python (no notebook code here)
   client.py           # OpenAI client: chat completions (+ per-token timing) and Whisper STT
   load.py             # concurrent LLM+STT load runner + stats (notebook 03)
   sweep.py            # single-node LLM concurrency-sweep runner + stats (notebook 04)
+  cluster.py          # Ray distributed load driver + aggregation (notebook 05)
   memprobe.py         # background RSS+iGPU sampler tied to server PID
   plotting.py         # matplotlib helpers used by the notebooks
 notebooks/
@@ -21,13 +23,14 @@ notebooks/
   02_memory_footprint.ipynb # the headline memory bar chart
   03_npu_vs_shared.ipynb    # Whisper on NPU vs sharing the iGPU (concurrency)
   04_b60_throughput.ipynb   # Arc Pro B60 single-node throughput / serving capacity
+  05_two_node_cluster.ipynb # two B60s via Ray: aggregate throughput + tokens/s/$ vs Ada
 data/
   prompts.json          # reproducible LLM prompts (text + vision)
   audio.json            # STT clips + declared durations (notebook 03)
   audio/                # the audio clips themselves
   memory_footprint.csv  # appended by notebook 02 across runs
   concurrency/          # per-config runs saved by notebook 03
-  b60/                  # per-node throughput runs saved by notebook 04
+  b60/                  # per-node throughput runs (04) + cluster runs (05)
 ```
 
 Notebook 02's deliverable is intentionally scoped to **memory footprint**,
@@ -114,6 +117,46 @@ note image/driver versions and frame any gap as "already cost-competitive on an
 immature stack." The Ada wins single-request latency — expected; the B60 story
 is throughput-per-dollar.
 
+## Notebook 05 — Two-node B60 cluster (Ray, Phase 2)
+
+Once both desktops pass notebook 04, this drives **both at once** and turns the
+per-node numbers into the headline **tokens/s/$** and **tokens/s/W** vs a single
+RTX 6000 Ada. It uses **Option B**: vLLM runs the models (one engine per B60,
+pinned to its card), and **Ray runs the experiment** — it places one load driver
+on each node (so requests originate locally), launches them together, and sums
+the results into system throughput. Ray never touches the GPU: it can't see
+Intel XPUs as resources and here doesn't need to — vLLM does the card binding,
+and the `xpu` resource below is just a placement label.
+
+Bring-up (run the notebook on the head node):
+
+```bash
+# 1. one vLLM engine per node on :8000, pinned to the local B60 — the exact
+#    command from notebook 04, on BOTH desktops:
+vllm serve <model> --max-num-seqs <KV ceiling> ...     # see notebook 04
+
+# 2. a Ray cluster across both desktops, each tagged with a custom xpu resource.
+#    Put the head on the box with more RAM.
+#    Same Ray + Python version on both, same LAN, GCS port 6379 reachable.
+ray start --head --resources='{"xpu": 1}'                       # desktop1 (head)
+ray start --address='<head-ip>:6379' --resources='{"xpu": 1}'   # desktop2 (worker)
+```
+
+The notebook connects with `ray.init(address='auto', runtime_env={'working_dir': ...})`
+(ships this repo to every worker so the driver code + `data/prompts.json`
+match), sweeps `CONCURRENCY_LEVELS` **per node**, and saves the combined run to
+`data/b60/cluster_<timestamp>.json`. `CONCURRENCY_LEVELS` must stay at/under each
+engine's `--max-num-seqs` KV ceiling — past it requests just queue.
+
+For the cost panel, set `ADA_TOKENS_PER_S` to a figure you **measured the same
+way** (run notebook 04 against the Ada at the same model, quantization, context,
+and `max_tokens`) — a spec-sheet number isn't apples-to-apples. The combined
+throughput is the sum of each node's capacity (the nodes are independent —
+separate cards and hosts, no shared endpoint), so an asymmetric node shows up as
+a shorter segment in the stacked chart rather than being hidden in an average.
+There is no single OpenAI endpoint in this topology; one auto-load-balanced
+endpoint is Option A (Ray Serve), a separate setup.
+
 ## How the bench is structured
 
 The harness does **not** spawn backend servers. OpenVINO, vLLM, and
@@ -169,6 +212,8 @@ Run `01_env.ipynb` first on a fresh Panther Lake box. Then `02` and `03` once
 per (backend, model) you want to compare. `04_b60_throughput.ipynb` is a
 standalone experiment on the Arc Pro B60 desktop — run it on its own; it needs
 the same env and a backend on `:9000` but nothing from 01–03.
+`05_two_node_cluster.ipynb` is Phase 2 — run it on the Ray head node once both
+B60 desktops pass 04 (needs the `ray[default]` dependency on every node).
 
 ## Notes / caveats
 

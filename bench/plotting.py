@@ -416,3 +416,76 @@ def sweep_curves(levels, *, knee_concurrency=None, peak_concurrency=None,
                      fontsize=13, y=1.02)
     fig.tight_layout()
     return fig, (axl, axr)
+
+
+# ── Two-node Ray cluster cost test (notebook 05) ─────────────────────────────
+
+def cluster_throughput(agg, *, node_order=None, figsize=(8, 5)):
+    """Stacked bars of system throughput vs per-node concurrency.
+
+    Each bar is the cluster's total tok/s at that concurrency-per-node, split
+    into per-node segments so an asymmetric node (e.g. a RAM-starved desktop
+    carrying less of the load) is visible rather than averaged away. `agg` is
+    bench.cluster.aggregate()'s output.
+    """
+    agg = sorted(agg, key=lambda r: r["concurrency_per_node"])
+    xs = list(range(len(agg)))
+    # stable host order = first appearance, or caller-pinned
+    hosts = node_order or list(dict.fromkeys(
+        h for r in agg for h in r["per_node_tokens_per_s"]))
+    palette = [B60_COLOR, "#d62728", "#2ca02c", "#9467bd"]
+
+    _, ax = plt.subplots(figsize=figsize)
+    bottoms = [0.0] * len(agg)
+    for i, host in enumerate(hosts):
+        vals = [r["per_node_tokens_per_s"].get(host, 0.0) for r in agg]
+        ax.bar(xs, vals, bottom=bottoms, width=0.6, label=host,
+               color=palette[i % len(palette)], edgecolor="white", zorder=3)
+        bottoms = [b + v for b, v in zip(bottoms, vals)]
+    for x, total in zip(xs, bottoms):
+        ax.text(x, total, f"{total:.0f}", ha="center", va="bottom",
+                fontsize=9, fontweight="bold", zorder=4)
+
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"{r['concurrency_per_node']}/node\n({r['total_in_flight']} total)"
+                        for r in agg], fontsize=9)
+    ax.set_xlabel("in-flight requests")
+    ax.set_ylabel("aggregate decode tok/s (system)")
+    ax.set_title("Two-node B60 cluster — combined throughput", fontsize=12)
+    ax.set_ylim(0, max(bottoms) * 1.18 if bottoms else 1)
+    ax.legend(title="node", fontsize=9, title_fontsize=9, frameon=True)
+    ax.grid(axis="y", linestyle=":", alpha=0.5, zorder=0)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    return ax
+
+
+def cost_comparison(rows, *, figsize=(11, 4.2)):
+    """Two panels — tokens/s/$ and tokens/s/W — one bar per system.
+
+    `rows` is bench.cluster.cost_metrics() output. The B60 system is Intel blue,
+    the Ada red, so the cost-effectiveness story reads at a glance: the B60 pair
+    usually wins tokens/s/$ by a wide margin; tokens/s/W is the closer fight and
+    the honest one to show alongside.
+    """
+    labels = [r["label"] for r in rows]
+    colors = [B60_COLOR if "B60" in l else "#d62728" for l in labels]
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=figsize)
+
+    for ax, key, title, ylab in [
+        (axl, "tokens_per_s_per_usd", "Throughput per dollar", "tok/s per $"),
+        (axr, "tokens_per_s_per_w", "Throughput per watt", "tok/s per W"),
+    ]:
+        vals = [r.get(key) or 0.0 for r in rows]
+        xs = range(len(rows))
+        ax.bar(xs, vals, color=colors, width=0.55, zorder=3)
+        for x, v in zip(xs, vals):
+            ax.text(x, v, f"{v:.3g}", ha="center", va="bottom", fontsize=9, zorder=4)
+        ax.set_xticks(list(xs)); ax.set_xticklabels(labels, fontsize=9)
+        ax.set_ylabel(ylab); ax.set_title(title, fontsize=12)
+        ax.set_ylim(0, max(vals) * 1.20 if any(vals) else 1)
+        ax.grid(axis="y", linestyle=":", alpha=0.5, zorder=0)
+        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+
+    fig.suptitle("Cost-effectiveness — 2× B60 vs 1× RTX 6000 Ada", fontsize=13, y=1.02)
+    fig.tight_layout()
+    return fig, (axl, axr)

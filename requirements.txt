@@ -3,3 +3,6 @@ Pillow>=10.0.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 jupyterlab>=4.0.0
+# Notebook 05 only (two-node Ray cluster). Install the SAME version on every
+# node, on matching Python — a version skew stops the cluster forming.
+ray[default]>=2.40.0
