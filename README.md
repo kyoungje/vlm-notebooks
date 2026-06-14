@@ -1,4 +1,8 @@
-# vlm-notebooks — OpenVINO vs vLLM memory footprint on Intel Panther Lake (Core Ultar Series 3)
+# vlm-notebooks — benchmarking small VLM/LLM serving on Intel hardware (Panther Lake iGPU/NPU · Arc Pro B60)
+
+Memory footprint, NPU-vs-iGPU concurrency, single-card serving throughput, and a
+two-node tokens/s/$ · tokens/s/W cost comparison — for small VLMs/LLMs on Intel
+silicon, measured against an OpenAI-compatible backend you bring up yourself.
 
 Five Jupyter notebooks + a tiny Python harness benchmarking small VLMs/LLMs
 on Intel hardware. Notebooks 01–03 ask **how much memory each backend's server
@@ -57,10 +61,11 @@ both paths concurrently for a fixed window.
 Unlike 01/02, this needs **two** servers up at once:
 
 ```bash
-# Gemma on the iGPU (vLLM-XPU) — same for both configs, :9000
-cd movensys_vlm/docker && ./vllm-intel-run.sh
+# LLM/VLM on the iGPU (vLLM-XPU) — same for both configs, :9000
+#   bring up any OpenAI-compatible backend (see "How the bench is structured")
+docker run --rm -p 9000:8000 --device /dev/dri <intel-vllm-xpu-image> --model <model> --port 8000
 
-# Whisper — ONE device per pass, :9010
+# Whisper STT — ONE device per pass, :9010 (any OpenAI-audio-compatible server)
 #   Config A (split):  WHISPER_DEVICE=NPU   -> /dev/accel
 #   Config B (shared): WHISPER_DEVICE=GPU   -> /dev/dri (the iGPU vLLM is on)
 ```
@@ -230,3 +235,7 @@ B60 desktops pass 04 (needs the `ray[default]` dependency on every node).
   `data/images/`. Drop a couple of representative JPEGs there before
   exercising the vision path; the bench skips rows whose image is
   missing.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

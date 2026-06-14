@@ -113,8 +113,8 @@ seconds (above) is unaffected.
 
 ```bash
 source .venv/bin/activate
-# Gemma on iGPU (vLLM-XPU), same for both passes:
-cd movensys_vlm/docker && ./vllm-intel-run.sh           # :9000
+# LLM/VLM on iGPU (vLLM-XPU), same for both passes — any OpenAI-compatible backend:
+docker run --rm -p 9000:8000 --device /dev/dri <intel-vllm-xpu-image> --model <model> --port 8000
 # Whisper, ONE device per pass:
 #   split:  WHISPER_DEVICE=NPU  -> :9010
 #   shared: WHISPER_DEVICE=GPU  -> :9010

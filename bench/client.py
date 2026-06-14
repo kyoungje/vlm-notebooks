@@ -168,8 +168,8 @@ def warmup(*, base_url: str, model: str, prompt: str = "Hi.", **kw) -> CallResul
 
 
 # ── Whisper STT path ─────────────────────────────────────────────────────────
-# The Whisper server (movensys whisper_server.py) speaks the OpenAI audio API:
-# POST /v1/audio/transcriptions with a multipart `file=` field. Same client,
+# The Whisper server (any OpenAI-audio-compatible STT server) speaks the OpenAI
+# audio API: POST /v1/audio/transcriptions with a multipart `file=` field. Same client,
 # different sub-API — so NPU (split) and iGPU (shared) deployments are measured
 # by moving base_url/device only, exactly like the chat path.
 

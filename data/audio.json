@@ -7,7 +7,7 @@
       "path": "data/audio/korean_audio.mp3",
       "language": "ko",
       "duration_s": null,
-      "_note": "Starter clip copied from movensys_vlm/docker/whisper. SET duration_s before relying on RTF — probe it once with `ffprobe -show_entries format=duration` or `python -c 'import librosa,sys;print(librosa.get_duration(path=sys.argv[1]))' <file>`. Until set, the notebook reports STT latency in seconds (still shows the tail) and skips RTF."
+      "_note": "Sample clip — drop your own short utterance here (any language). SET duration_s before relying on RTF — probe it once with `ffprobe -show_entries format=duration` or `python -c 'import librosa,sys;print(librosa.get_duration(path=sys.argv[1]))' <file>`. Until set, the notebook reports STT latency in seconds (still shows the tail) and skips RTF."
     }
   ]
 }
